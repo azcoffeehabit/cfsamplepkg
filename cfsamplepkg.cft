@@ -1,0 +1,951 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  "Description" : "TEST0_Tomcat_Kafka_Nginx deployment",
+
+  "Metadata" : {
+    "Instances" : {"Description":  "TEST0_Tomcat_Kafka_Nginx"}
+  },
+
+  "Mappings": {
+    "VPCConfig" : {
+      "ApplicationVPC" : { "CIDR": "10.0.0.0/16" },
+      "AdminVPC" : { "CIDR" : "172.16.100.0/24" }
+    },
+
+    "SubnetConfig" : {
+      "Admin" : { "CIDR" : "172.16.100.0/24"},
+      "Pub0" : { "CIDR": "10.0.1.0/24" },
+      "Web0" : { "CIDR": "10.0.2.0/24" },
+      "App0" : { "CIDR": "10.0.3.0/24" },
+      "Data0" : { "CIDR": "10.0.4.0/24" },
+      "Pub1" : { "CIDR": "10.0.11.0/24" },
+      "Web1" : { "CIDR": "10.0.12.0/24" },
+      "App1" : { "CIDR": "10.0.13.0/24" },
+      "Data1" : { "CIDR": "10.0.14.0/24" },
+      "Pub2" : { "CIDR": "10.0.21.0/24" },
+      "Web2" : { "CIDR": "10.0.22.0/24" },
+      "App2" : { "CIDR": "10.0.23.0/24" },
+      "Data2" : { "CIDR": "10.0.24.0/24" }
+    }
+  },
+
+  "Parameters" : {
+    "InstanceType" : {
+      "Description" : "Instance sizing options for the Tomcat server",
+      "Type" : "String",
+      "Default" : "t2.micro",
+      "AllowedValues" : ["t2.micro", "m1.small", "m1.large"],
+      "Description" : "Enter t2.micro, m1.small, or m1.large. Default is t2.micro."
+    },
+
+    "SshKeyName": {
+      "Description" : "Name of an existing EC2 KeyPair to enable SSH access to the instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription" : "must be the name of an existing EC2 KeyPair."
+    },
+
+    "SSHAccessIP" : {
+      "Description" : " The IP address range that can be used to SSH to the EC2 instances",
+      "Type": "String",
+      "MinLength": "9",
+      "MaxLength": "18",
+      "Default": "0.0.0.0/0",
+      "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+      "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+    },
+
+    "DNSName" : {
+      "Description": "The public domain name used for the web application (do not change this)",
+      "Type": "String",
+      "Default" : "message.customhousesystems.com"
+    }
+  },
+
+  "Conditions" : {
+  },
+
+  "Resources" : {
+    "ApplicationVPC" : {
+      "Type" : "AWS::EC2::VPC",
+      "Properties" : {
+        "CidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "ApplicationVPC", "CIDR" ] },
+        "EnableDnsSupport" : true,
+        "EnableDnsHostnames" : true,
+        "InstanceTenancy" : "default"
+      }
+    },
+
+    "AdminVPC" : {
+      "Type" : "AWS::EC2::VPC",
+      "Properties" : {
+        "CidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] },
+        "EnableDnsSupport" : true,
+        "EnableDnsHostnames" : true,
+        "InstanceTenancy" : "default"
+      }
+    },
+
+    "LambdaDescAZRole": {
+      "Type": "AWS::IAM::Role",
+      "Condition": "",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{
+              "Effect": "Allow",
+              "Principal": {"Service": ["lambda.amazonaws.com"]},
+              "Action": ["sts:AssumeRole"]
+          }]
+        },
+        "Path": "/",
+        "Policies": [{
+          "PolicyName": "root",
+          "PolicyDocument": {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Action": ["logs:CreateLogGroup",
+                           "logs:CreateLogStream",
+                           "logs:PutLogEvents"],
+                "Resource": "arn:aws:logs:*:*:*"
+            },{
+                "Effect": "Allow",
+                "Action": ["ec2:DescribeAvailabilityZones"],
+                "Resource": "*"
+            }]
+          }
+        }]
+      }
+    },
+
+    "GetAZInfoFunction" : {
+      "Type": "AWS::Lambda::Function",
+      "Condition": "",
+      "Properties": {
+        "Code": {
+          "ZipFile" : { "Fn::Join" : ["\n", [
+              "const response=require('cfn-response');",
+              "const AWS=require('aws-sdk');",
+              "exports.handler=function(event, context){AWS.config.update({region:process.env.AWS_REGION});var ec2=new AWS.EC2();var availabilityZones=[];var params={DryRun:false,Filters:[{Name:'state',Values:['available']}]};ec2.describeAvailabilityZones(params,function(err, data){if(err){process.exit(1);}else{var newData=data.AvailabilityZones;for(let i=0;i<newData.length;i++){availabilityZones.push(newData[i].ZoneName);",
+              "if(availabilityZones.length === newData.length){var resp={};resp.AZs=availabilityZones;response.send(event,context,response.SUCCESS,resp);}}}});}"
+            ]]}
+        },
+        "Handler": "index.handler",
+        "Role": { "Fn::GetAtt" : ["LambdaDescAZRole", "Arn"] },
+        "Runtime": "nodejs6.10",
+        "MemorySize": "128",
+        "Timeout": "15"
+      }
+    },
+
+    "AZInfo": {
+      "Type": "Custom::AZInfo",
+      "Condition": "",
+      "Properties": {
+        "ServiceToken": { "Fn::GetAtt" : ["GetAZInfoFunction", "Arn"] },
+        "Region": { "Ref": "AWS::Region" }
+      }
+    },
+
+    "AdminVPCPeeringConnection" : {
+      "Type" : "AWS::EC2::VPCPeeringConnection",
+      "Properties" : {
+        "PeerVpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [
+          { "Key" : "Name", "Value": "TEST0_Tomcat_Kafka_Nginx" }
+        ],
+        "VpcId" : { "Ref": "AdminVPC" }
+      }
+    },
+
+    "AdminSSHAccessSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "AdminVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable SSH access via port 22",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "CidrIp" : {"Ref": "SSHAccessIP"}
+        }]
+      }
+    },
+
+    "ApplicationSSHAccessSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable SSH access via port 22",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "CidrIp" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] }
+        }]
+      }
+    },
+
+    "AccessSecurityGroupApp" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable HTTP access via port 8080",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "8080",
+          "ToPort" : "8080",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "AccessSecurityGroupHTTP" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable HTTP access via port 80",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "80",
+          "ToPort" : "80",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "AccessSecurityGroupHTTPS" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable HTTP access via port 443",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "443",
+          "ToPort" : "443",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "AdminInternetGateway" : {
+      "Type" : "AWS::EC2::InternetGateway",
+      "Properties" : {
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "AdminVPCIGAttach" : {
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "InternetGatewayId" : { "Ref" : "AdminInternetGateway" },
+        "VpcId" : { "Ref" : "AdminVPC" }
+      }
+    },
+
+    "ApplicationInternetGateway" : {
+      "Type" : "AWS::EC2::InternetGateway",
+      "Properties" : {
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "ApplicationVPCIGAttach" : {
+      "Type" : "AWS::EC2::VPCGatewayAttachment",
+      "Properties" : {
+        "InternetGatewayId" : {"Ref" : "ApplicationInternetGateway"},
+        "VpcId" : { "Ref" : "ApplicationVPC" }
+      }
+    },
+
+    "AdminVPCDefaultRouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "AdminVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "ApplicationVPCDefaultRouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "AdminVPCRouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "NAT0RouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "NAT1RouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "NAT2RouteTable" : {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"} ]
+      }
+    },
+
+    "ApplicationRouteIGW" : {
+      "Type" : "AWS::EC2::Route",
+      "DependsOn" : "ApplicationVPCIGAttach",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "ApplicationVPCDefaultRouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "ApplicationInternetGateway" }
+      }
+    },
+
+    "AdminRouteIGW" : {
+      "Type" : "AWS::EC2::Route",
+      "DependsOn" : "AdminVPCIGAttach",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "AdminVPCDefaultRouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "GatewayId" : { "Ref" : "AdminInternetGateway" }
+      }
+    },
+
+    "AdminRouteApplicationSubnets" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "AdminVPCDefaultRouteTable" },
+        "DestinationCidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "ApplicationVPC", "CIDR" ] },
+        "VpcPeeringConnectionId" : { "Ref" :   "AdminVPCPeeringConnection" }
+      }
+    },
+
+    "ApplicationRouteAdminSubnetDefault" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "ApplicationVPCDefaultRouteTable" },
+        "DestinationCidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] },
+        "VpcPeeringConnectionId" : { "Ref" :   "AdminVPCPeeringConnection" }
+      }
+    },
+
+    "ApplicationRoute0AdminSubnet" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : {"Ref" : "NAT0RouteTable" },
+        "DestinationCidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] },
+        "VpcPeeringConnectionId" : { "Ref" :   "AdminVPCPeeringConnection" }
+      }
+    },
+
+    "ApplicationRoute1AdminSubnet" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : {"Ref" : "NAT1RouteTable" },
+        "DestinationCidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] },
+        "VpcPeeringConnectionId" : { "Ref" :   "AdminVPCPeeringConnection" }
+      }
+    },
+
+    "ApplicationRoute2AdminSubnet" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : {"Ref" : "NAT2RouteTable" },
+        "DestinationCidrBlock" : { "Fn::FindInMap" : [ "VPCConfig", "AdminVPC", "CIDR" ] },
+        "VpcPeeringConnectionId" : { "Ref" :   "AdminVPCPeeringConnection" }
+      }
+    },
+
+    "NAT0" : {
+      "DependsOn" : "ApplicationVPCIGAttach",
+      "Type" : "AWS::EC2::NatGateway",
+      "Properties" : {
+        "AllocationId" : { "Fn::GetAtt" : ["EIPNAT0", "AllocationId"]},
+        "SubnetId" : { "Ref" : "PubSubnet0"},
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "EIPNAT0" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+        "Domain" : "vpc"
+      }
+    },
+
+    "RouteNAT0" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "NAT0RouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "NatGatewayId" : { "Ref" : "NAT0" }
+      }
+    },
+
+    "NAT1" : {
+      "DependsOn" : "ApplicationVPCIGAttach",
+      "Type" : "AWS::EC2::NatGateway",
+      "Properties" : {
+        "AllocationId" : { "Fn::GetAtt" : ["EIPNAT1", "AllocationId"]},
+        "SubnetId" : { "Ref" : "PubSubnet1"},
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "EIPNAT1" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+        "Domain" : "vpc"
+      }
+    },
+
+    "RouteNAT1" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "NAT1RouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "NatGatewayId" : { "Ref" : "NAT1" }
+      }
+    },
+
+    "NAT2" : {
+      "DependsOn" : "ApplicationVPCIGAttach",
+      "Type" : "AWS::EC2::NatGateway",
+      "Properties" : {
+        "AllocationId" : { "Fn::GetAtt" : ["EIPNAT2", "AllocationId"]},
+        "SubnetId" : { "Ref" : "PubSubnet2"},
+        "Tags" : [ {"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "EIPNAT2" : {
+      "Type" : "AWS::EC2::EIP",
+      "Properties" : {
+        "Domain" : "vpc"
+      }
+    },
+
+    "RouteNAT2" : {
+      "Type" : "AWS::EC2::Route",
+      "Properties" : {
+        "RouteTableId" : { "Ref" : "NAT2RouteTable" },
+        "DestinationCidrBlock" : "0.0.0.0/0",
+        "NatGatewayId" : { "Ref" : "NAT2" }
+      }
+    },
+
+    "AdminSubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "AdminSubnet" },
+        "RouteTableId" : { "Ref" : "AdminVPCDefaultRouteTable" }
+      }
+    },
+
+
+    "Pub0SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PubSubnet0" },
+        "RouteTableId" : { "Ref" : "ApplicationVPCDefaultRouteTable" }
+      }
+    },
+
+    "Web0SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "WebSubnet0" },
+        "RouteTableId" : { "Ref" : "NAT0RouteTable" }
+      }
+    },
+
+    "App0SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "AppSubnet0" },
+        "RouteTableId" : { "Ref" : "NAT0RouteTable" }
+      }
+    },
+
+    "Data0SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "DataSubnet0" },
+        "RouteTableId" : { "Ref" : "NAT0RouteTable" }
+      }
+    },
+
+    "Pub1SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PubSubnet1" },
+        "RouteTableId" : { "Ref" : "ApplicationVPCDefaultRouteTable" }
+      }
+    },
+
+    "Web1SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "WebSubnet1" },
+        "RouteTableId" : { "Ref" : "NAT1RouteTable" }
+      }
+    },
+
+    "App1SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "AppSubnet1" },
+        "RouteTableId" : { "Ref" : "NAT1RouteTable" }
+      }
+    },
+
+    "Data1SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "DataSubnet1" },
+        "RouteTableId" : { "Ref" : "NAT1RouteTable" }
+      }
+    },
+
+    "Pub2SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "PubSubnet2" },
+        "RouteTableId" : { "Ref" : "ApplicationVPCDefaultRouteTable" }
+      }
+    },
+
+    "Web2SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "WebSubnet2" },
+        "RouteTableId" : { "Ref" : "NAT2RouteTable" }
+      }
+    },
+
+    "App2SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "AppSubnet2" },
+        "RouteTableId" : { "Ref" : "NAT2RouteTable" }
+      }
+    },
+
+    "Data2SubnetRouteTableAssociation" : {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties" : {
+        "SubnetId" : { "Ref" : "DataSubnet2" },
+        "RouteTableId" : { "Ref" : "NAT2RouteTable" }
+      }
+    },
+
+    "AdminSubnet" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Admin", "CIDR" ] },
+        "MapPublicIpOnLaunch" : true,
+        "VpcId" : { "Ref" : "AdminVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx_ADMIN" } ]
+      }
+    },
+
+    "PubSubnet0" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Pub0", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "WebSubnet0" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Web0", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "AppSubnet0" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "App0", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "DataSubnet0" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Data0", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "PubSubnet1" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Pub1", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "WebSubnet1" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Web1", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "AppSubnet1" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "App1", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "DataSubnet1" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Data1", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "PubSubnet2" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Pub2", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "WebSubnet2" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Web2", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "AppSubnet2" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "App2", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "DataSubnet2" : {
+      "Type" : "AWS::EC2::Subnet",
+      "Properties" : {
+        "AvailabilityZone" : { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"] } ] },
+        "CidrBlock" : { "Fn::FindInMap" : [ "SubnetConfig", "Data2", "CIDR" ] },
+        "MapPublicIpOnLaunch" : false,
+        "VpcId" : { "Ref" : "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ]
+      }
+    },
+
+    "WebHostname" :
+    {
+      "Type" : "AWS::Route53::RecordSet",
+      "Properties" : {
+        "AliasTarget" : { "DNSName" : { "Fn::GetAtt" : ["WebALB","DNSName"] }, "EvaluateTargetHealth" : false, "HostedZoneId" : { "Fn::GetAtt" : ["WebALB", "CanonicalHostedZoneID"] } },
+        "Comment" : "Zone alias targeted to web alb",
+        "HostedZoneId" : "Z27QKBA9BU9DHL",
+        "Name" : {"Ref" : "DNSName"},
+        "Type" : "A",
+      }
+    },
+
+    "WebALB" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : "TEST0TomcatKafkaNginxWEBALB",
+        "Scheme" : "internet-facing",
+        "SecurityGroups" : [ { "Fn::GetAtt" : [ "AccessSecurityGroupHTTP", "GroupId" ] }, { "Fn::GetAtt" : [ "AccessSecurityGroupHTTPS", "GroupId" ] } ],
+        "Subnets" : [ {"Ref" : "PubSubnet0"}, {"Ref" : "PubSubnet1"}, {"Ref" : "PubSubnet2"} ],
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "Type" : "application",
+        "IpAddressType" : "ipv4"
+      }
+    },
+
+    "WebAutoScalingLaunchConfiguration" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Properties" : {
+        "AssociatePublicIpAddress" : false,
+        "ImageId" : "ami-c62eaabe",
+        "InstanceMonitoring" : false,
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "SecurityGroups" : [ {"Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ]}, {"Fn::GetAtt" : ["AccessSecurityGroupHTTP", "GroupId"]}, {"Fn::GetAtt" : ["AccessSecurityGroupHTTPS", "GroupId"]} ],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y netcat;\n",
+            "apt-get install -y apt-transport-https;\n",
+            "wget -qO - https://packages.chef.io/chef.asc | apt-key add - ;\n",
+            "echo 'deb https://packages.chef.io/repos/apt/current xenial main' > /etc/apt/sources.list.d/chef-current.list;",
+            "apt-get update;\n",
+            "apt-get install -y chef;\n",
+            "echo '{\"pkg_nginx\": {\"server_name\": \"", { "Ref" : "DNSName" }, "\", \"application_balancer\": \"", { "Fn::GetAtt" : ["AppALB","DNSName"] }, "\"},' > /root/web.json;\n",
+            "echo '\"run_list\":[\"recipe[pkg_nginx]\"]}' >> /root/web.json;\n",
+            "echo 'file_cache_path \"/root/chef/chef-solo\"' > /root/solo.rb;\n",
+            "echo 'cookbooks_path \"/root/chef/cookbooks\"' >> /root/solo.rb;\n",
+            "chef-solo -c /root/solo.rb -j /root/web.json --recipe-url https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-nginx.tar.gz;\n",
+            "service nginx restart;\n"
+          ]]}
+        }
+      }
+    },
+
+    "WebAutoScalingTargetGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [ { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]} ],
+        "Cooldown" : "5",
+        "DesiredCapacity" : "3",
+        "HealthCheckGracePeriod" : 15,
+        "HealthCheckType" : "ELB",
+        "LaunchConfigurationName" : { "Ref" : "WebAutoScalingLaunchConfiguration" },
+        "MaxSize" : 3,
+        "MinSize" : 3,
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx", "PropagateAtLaunch" : true } ],
+        "TargetGroupARNs" : [ {"Ref" : "WebALBTargetGroup80"}, {"Ref" : "WebALBTargetGroup443"}  ],
+        "VPCZoneIdentifier" : [ {"Ref" : "WebSubnet0"}, {"Ref" : "WebSubnet1"}, {"Ref" : "WebSubnet2"} ]
+      }
+    },
+
+    "WebALBTargetGroup80" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : 60,
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : 80,
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : 10,
+        "HealthyThresholdCount" : 2,
+        "Matcher" : { "HttpCode" : "301" },
+        "Name" : "TEST0TomcatKafkaNginxWeb80",
+        "Port" : 80,
+        "Protocol" : "HTTP",
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "UnhealthyThresholdCount" : 3,
+        "VpcId" : { "Ref" : "ApplicationVPC" }
+      }
+    },
+
+    "WebALBTargetGroup443" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : 60,
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : 443,
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : 10,
+        "HealthyThresholdCount" : 2,
+        "Matcher" : { "HttpCode" : "200" },
+        "Name" : "TEST0TomcatKafkaNginxWeb443",
+        "Port" : 443,
+        "Protocol" : "HTTP",
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "UnhealthyThresholdCount" : 3,
+        "VpcId" : { "Ref" : "ApplicationVPC" }
+      }
+    },
+
+    "WebALBListenerHTTP" :{
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions" : [ { "TargetGroupArn" : { "Ref": "WebALBTargetGroup80" }, "Type" : "forward" } ],
+        "LoadBalancerArn" : { "Ref": "WebALB" },
+        "Port" : 80,
+        "Protocol" : "HTTP"
+      }
+    },
+
+    "WebALBListenerHTTPS" :{
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "Certificates" : [ { "CertificateArn" : "arn:aws:acm:us-west-2:623680212266:certificate/bde55286-5888-4f2b-88a3-7a8437514b55" } ],
+        "DefaultActions" : [ { "TargetGroupArn" : { "Ref": "WebALBTargetGroup443" }, "Type" : "forward" } ],
+        "LoadBalancerArn" : { "Ref": "WebALB" },
+        "Port" : 443,
+        "Protocol" : "HTTPS"
+      }
+    },
+
+    "AppALB" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : "TEST0TomcatKafkaNginxApp",
+        "Scheme" : "internal",
+        "SecurityGroups" : [ { "Fn::GetAtt" : [ "AccessSecurityGroupApp", "GroupId" ] } ],
+        "Subnets" : [ {"Ref" : "AppSubnet0"}, {"Ref" : "AppSubnet1"}, {"Ref" : "AppSubnet2"} ],
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "Type" : "application",
+        "IpAddressType" : "ipv4"
+      }
+    },
+
+    "AppAutoScalingLaunchConfiguration" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Properties" : {
+        "AssociatePublicIpAddress" : false,
+        "ImageId" : "ami-c62eaabe",
+        "InstanceMonitoring" : false,
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "SecurityGroups" : [ {"Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ]}, {"Fn::GetAtt" : ["AccessSecurityGroupApp", "GroupId"]} ],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y netcat;\n",
+            "apt-get install -y apt-transport-https;\n",
+            "wget -qO - https://packages.chef.io/chef.asc | apt-key add - ;\n",
+            "echo 'deb https://packages.chef.io/repos/apt/current xenial main' > /etc/apt/sources.list.d/chef-current.list;",
+            "apt-get update;\n",
+            "apt-get install -y chef;\n",
+            "echo '{\"pkg-tomcat\": {\"server_name\": \"", { "Ref" : "DNSName" }, "\", \"application_balancer\": \"", { "Fn::GetAtt" : ["AppALB","DNSName"] }, "\"},' > /root/web.json;\n",
+            "echo '\"run_list\":[\"recipe[pkg-tomcat]\"]}' >> /root/web.json;\n",
+            "echo 'file_cache_path \"/root/chef/chef-solo\"' > /root/solo.rb;\n",
+            "echo 'cookbooks_path \"/root/chef/cookbooks\"' >> /root/solo.rb;\n",
+            "chef-solo -c /root/solo.rb -j /root/web.json --recipe-url https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-tomcat.tar.gz;\n"
+          ]]}
+        }
+      }
+    },
+
+    "AppAutoScalingTargetGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [ { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]} ],
+        "Cooldown" : "5",
+        "DesiredCapacity" : "3",
+        "HealthCheckGracePeriod" : 15,
+        "HealthCheckType" : "ELB",
+        "LaunchConfigurationName" : { "Ref" : "AppAutoScalingLaunchConfiguration" },
+        "MaxSize" : 3,
+        "MinSize" : 3,
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx", "PropagateAtLaunch" : true } ],
+        "TargetGroupARNs" : [ {"Ref" : "AppALBTargetGroup"} ],
+        "VPCZoneIdentifier" : [ {"Ref" : "AppSubnet0"}, {"Ref" : "AppSubnet1"}, {"Ref" : "AppSubnet2"} ]
+      }
+    },
+
+    "AppALBTargetGroup" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : 60,
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : 8080,
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : 10,
+        "HealthyThresholdCount" : 2,
+        "Matcher" : { "HttpCode" : "200" },
+        "Name" : "TEST0TomcatKafkaNginxApp",
+        "Port" : 8080,
+        "Protocol" : "HTTP",
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "UnhealthyThresholdCount" : 3,
+        "VpcId" : { "Ref" : "ApplicationVPC" }
+      }
+    },
+
+    "AppALBListener" :{
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions" : [ { "TargetGroupArn" : { "Ref": "AppALBTargetGroup" }, "Type" : "forward" } ],
+        "LoadBalancerArn" : { "Ref": "AppALB" },
+        "Port" : 8080,
+        "Protocol" : "HTTP"
+      }
+    },
+
+    "SSHBastionInstance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "ImageId" : "ami-c62eaabe",
+        "SubnetId" : {"Ref" : "AdminSubnet"},
+        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "AdminSSHAccessSecurityGroup", "GroupId" ] } ],
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+             "#!/bin/bash -xe\n",
+
+             "export MYPUBLICIP=$(curl http://169.254.169.254/latest/meta-data/public-ipv4)\n",
+             "apt-get update;\n",
+             "apt-get install -y chef\n",
+
+          ]]}
+        }
+      }
+    }
+
+
+  },
+
+  "Outputs" : {
+  }
+}
