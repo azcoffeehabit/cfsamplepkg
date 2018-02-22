@@ -1114,10 +1114,10 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SubnetId" : {"Ref" : "DataSubnet0"},
         "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI0" }, "DeviceIndex" : "0" } ],
         "UserData" : {
           "Fn::Base64" : { "Fn::Join" : ["", [
             "#!/bin/bash -xe\n",
@@ -1141,10 +1141,10 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SubnetId" : {"Ref" : "DataSubnet1"},
         "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI1" }, "DeviceIndex" : "0" } ],
         "UserData" : {
           "Fn::Base64" : { "Fn::Join" : ["", [
             "#!/bin/bash -xe\n",
@@ -1168,10 +1168,10 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SubnetId" : {"Ref" : "DataSubnet2"},
         "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI2" }, "DeviceIndex" : "0" } ],
         "UserData" : {
           "Fn::Base64" : { "Fn::Join" : ["", [
             "#!/bin/bash -xe\n",
@@ -1187,36 +1187,6 @@
             "service zookeeper restart;\n"
           ]]}
         }
-      }
-    },
-
-    "Zookeeper0ENIAttach" :{
-      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
-      "Properties" : {
-        "DeleteOnTermination": false,
-        "DeviceIndex": 1,
-        "InstanceId": { "Ref" : "ZookeeperInstance0" },
-        "NetworkInterfaceId": { "Ref" : "ZookeeperENI0" }
-      }
-    },
-
-    "Zookeeper1ENIAttach" :{
-      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
-      "Properties" : {
-        "DeleteOnTermination": false,
-        "DeviceIndex": 1,
-        "InstanceId": { "Ref" : "ZookeeperInstance1" },
-        "NetworkInterfaceId": { "Ref" : "ZookeeperENI1" }
-      }
-    },
-
-    "Zookeeper2ENIAttach" :{
-      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
-      "Properties" : {
-        "DeleteOnTermination": false,
-        "DeviceIndex": 1,
-        "InstanceId": { "Ref" : "ZookeeperInstance2" },
-        "NetworkInterfaceId": { "Ref" : "ZookeeperENI2" }
       }
     },
 
