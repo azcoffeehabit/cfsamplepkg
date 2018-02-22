@@ -1114,7 +1114,6 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
         "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI0" }, "DeviceIndex" : "0" } ],
@@ -1141,7 +1140,6 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
         "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI1" }, "DeviceIndex" : "0" } ],
@@ -1168,7 +1166,6 @@
       "Properties" : {
         "InstanceType" : { "Ref" : "InstanceType" },
         "ImageId" : "ami-c62eaabe",
-        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
         "KeyName" : { "Ref" : "SshKeyName" },
         "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
         "NetworkInterfaces" : [  { "NetworkInterfaceId" : { "Ref" : "ZookeeperENI2" }, "DeviceIndex" : "0" } ],
