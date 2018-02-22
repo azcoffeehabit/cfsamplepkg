@@ -26,8 +26,15 @@
       "Web2" : { "CIDR": "10.0.22.0/24" },
       "App2" : { "CIDR": "10.0.23.0/24" },
       "Data2" : { "CIDR": "10.0.24.0/24" }
+    },
+
+    "ZookeeperENI" : {
+      "Zookeeper0" : { "IP": "10.0.4.10" },
+      "Zookeeper1" : { "IP": "10.0.14.10" },
+      "Zookeeper2" : { "IP": "10.0.24.10" }
     }
   },
+
 
   "Parameters" : {
     "InstanceType" : {
@@ -228,6 +235,66 @@
           "IpProtocol" : "tcp",
           "FromPort" : "443",
           "ToPort" : "443",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "AccessSecurityGroupKafka" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable Kafka client access via port 9092",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "9092",
+          "ToPort" : "9092",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "ZookeeperSecurityGroupClient" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable zookeeeper client access via port 2181",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "2181",
+          "ToPort" : "2181",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "ZookeeperSecurityGroupClusterFollower" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable zookeeeper follower access via port 2888",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "2888",
+          "ToPort" : "2888",
+          "CidrIp" : "0.0.0.0/0"
+        }]
+      }
+    },
+
+    "ZookeeperSecurityGroupClusterLeader" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref": "ApplicationVPC" },
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "GroupDescription" : "Enable zookeeeper leader election port 3888",
+        "SecurityGroupIngress" : [{
+          "IpProtocol" : "tcp",
+          "FromPort" : "3888",
+          "ToPort" : "3888",
           "CidrIp" : "0.0.0.0/0"
         }]
       }
@@ -921,6 +988,238 @@
       }
     },
 
+    "KafkaALB" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : "TEST0TomcatKafkaNginxAppKfalb",
+        "Scheme" : "internal",
+        "SecurityGroups" : [ { "Fn::GetAtt" : [ "AccessSecurityGroupKafka", "GroupId" ] } ],
+        "Subnets" : [ {"Ref" : "DataSubnet0"}, {"Ref" : "DataSubnet1"}, {"Ref" : "DataSubnet2"} ],
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "Type" : "application",
+        "IpAddressType" : "ipv4"
+      }
+    },
+
+    "KafkaAutoScalingLaunchConfiguration" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Properties" : {
+        "AssociatePublicIpAddress" : false,
+        "ImageId" : "ami-c62eaabe",
+        "InstanceMonitoring" : false,
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "SecurityGroups" : [ {"Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ]}, {"Fn::GetAtt" : ["AccessSecurityGroupKafka", "GroupId"]} ],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y netcat;\n",
+            "apt-get install -y apt-transport-https;\n",
+            "wget -qO - https://packages.chef.io/chef.asc | apt-key add - ;\n",
+            "echo 'deb https://packages.chef.io/repos/apt/current xenial main' > /etc/apt/sources.list.d/chef-current.list;",
+            "apt-get update;\n",
+            "apt-get install -y chef;\n",
+            "echo '{\"pkg-kafka\": {\"server_name\": \"", { "Ref" : "DNSName" }, "\", \"application_balancer\": \"", { "Fn::GetAtt" : ["AppALB","DNSName"] }, "\"},' > /root/web.json;\n",
+            "echo '\"run_list\":[\"recipe[pkg-kafka]\"]}' >> /root/web.json;\n",
+            "echo 'file_cache_path \"/root/chef/chef-solo\"' > /root/solo.rb;\n",
+            "echo 'cookbooks_path \"/root/chef/cookbooks\"' >> /root/solo.rb;\n",
+            "chef-solo -c /root/solo.rb -j /root/web.json --recipe-url https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-kafka.tar.gz;\n"
+          ]]}
+        }
+      }
+    },
+
+    "KafkaAutoScalingTargetGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "AvailabilityZones" : [ { "Fn::Select" : [ "0", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "1", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]}, { "Fn::Select" : [ "2", { "Fn::GetAtt" : ["AZInfo", "AZs"]}]} ],
+        "Cooldown" : "5",
+        "DesiredCapacity" : "3",
+        "HealthCheckGracePeriod" : 15,
+        "HealthCheckType" : "EC2",
+        "LaunchConfigurationName" : { "Ref" : "KafkaAutoScalingLaunchConfiguration" },
+        "MaxSize" : 3,
+        "MinSize" : 3,
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx", "PropagateAtLaunch" : true } ],
+        "TargetGroupARNs" : [ {"Ref" : "KafkaALBTargetGroup"} ],
+        "VPCZoneIdentifier" : [ {"Ref" : "DataSubnet0"}, {"Ref" : "DataSubnet1"}, {"Ref" : "DataSubnet2"} ]
+      }
+    },
+
+    "KafkaALBTargetGroup" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : 60,
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : 9092,
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : 10,
+        "HealthyThresholdCount" : 2,
+        "Matcher" : { "HttpCode" : "200" },
+        "Name" : "TEST0TomcatKafkaNginxKafka",
+        "Port" : 9092,
+        "Protocol" : "HTTP",
+        "Tags" : [ { "Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx" } ],
+        "UnhealthyThresholdCount" : 3,
+        "VpcId" : { "Ref" : "ApplicationVPC" }
+      }
+    },
+
+    "KafkaALBListener" :{
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions" : [ { "TargetGroupArn" : { "Ref": "KafkaALBTargetGroup" }, "Type" : "forward" } ],
+        "LoadBalancerArn" : { "Ref": "KafkaALB" },
+        "Port" : 9092,
+        "Protocol" : "HTTP"
+      }
+    },
+
+    "ZookeeperENI0" : {
+      "Type" : "AWS::EC2::NetworkInterface",
+      "Properties" : {
+        "Description" : "Zookeeper0 instance interface",
+        "GroupSet" :  [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "PrivateIpAddress" : { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper0", "IP" ] },
+        "SubnetId" : {"Ref" : "DataSubnet0"},
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "ZookeeperENI1" : {
+      "Type" : "AWS::EC2::NetworkInterface",
+      "Properties" : {
+        "Description" : "Zookeeper1 instance interface",
+        "GroupSet" :  [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "PrivateIpAddress" : { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper1", "IP" ] },
+        "SubnetId" : {"Ref" : "DataSubnet1"},
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "ZookeeperENI2" : {
+      "Type" : "AWS::EC2::NetworkInterface",
+      "Properties" : {
+        "Description" : "Zookeeper2 instance interface",
+        "GroupSet" :  [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "PrivateIpAddress" : { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper2", "IP" ] },
+        "SubnetId" : {"Ref" : "DataSubnet2"},
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}]
+      }
+    },
+
+    "ZookeeperInstance0" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "ImageId" : "ami-c62eaabe",
+        "SubnetId" : {"Ref" : "DataSubnet0"},
+        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y zookeeper zookeeperd;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper0", "IP" ] }, "   zookeeper0' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper1", "IP" ] }, "   zookeeper1' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper2", "IP" ] }, "   zookeeper2' >> /etc/hosts;\n",
+            "echo '1' > /etc/zookeeper/conf/myid;\n",
+            "echo 'server.1=zookeeper0:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.2=zookeeper1:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.3=zookeeper2:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "service zookeeper restart;\n"
+          ]]}
+        }
+      }
+    },
+
+    "ZookeeperInstance1" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "ImageId" : "ami-c62eaabe",
+        "SubnetId" : {"Ref" : "DataSubnet1"},
+        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y zookeeper zookeeperd;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper0", "IP" ] }, "   zookeeper0' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper1", "IP" ] }, "   zookeeper1' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper2", "IP" ] }, "   zookeeper2' >> /etc/hosts;\n",
+            "echo '2' > /etc/zookeeper/conf/myid;\n",
+            "echo 'server.1=zookeeper0:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.2=zookeeper1:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.3=zookeeper2:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "service zookeeper restart;\n"
+          ]]}
+        }
+      }
+    },
+
+    "ZookeeperInstance2" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "ImageId" : "ami-c62eaabe",
+        "SubnetId" : {"Ref" : "DataSubnet2"},
+        "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ApplicationSSHAccessSecurityGroup", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClient", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterFollower", "GroupId" ] }, { "Fn::GetAtt" : [ "ZookeeperSecurityGroupClusterLeader", "GroupId" ] } ],
+        "KeyName" : { "Ref" : "SshKeyName" },
+        "Tags" : [{"Key" : "Name", "Value" : "TEST0_Tomcat_Kafka_Nginx"}],
+        "UserData" : {
+          "Fn::Base64" : { "Fn::Join" : ["", [
+            "#!/bin/bash -xe\n",
+            "apt-get update;\n",
+            "apt-get install -y zookeeper zookeeperd;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper0", "IP" ] }, "   zookeeper0' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper1", "IP" ] }, "   zookeeper1' >> /etc/hosts;\n",
+            "echo '", { "Fn::FindInMap" : [ "ZookeeperENI", "Zookeeper2", "IP" ] }, "   zookeeper2' >> /etc/hosts;\n",
+            "echo '3' > /etc/zookeeper/conf/myid;\n",
+            "echo 'server.1=zookeeper0:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.2=zookeeper1:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "echo 'server.3=zookeeper2:2888:3888' >> /etc/zookeeper/conf/zoo.cfg;\n",
+            "service zookeeper restart;\n"
+          ]]}
+        }
+      }
+    },
+
+    "Zookeeper0ENIAttach" :{
+      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
+      "Properties" : {
+        "DeleteOnTermination": false,
+        "DeviceIndex": 1,
+        "InstanceId": { "Ref" : "ZookeeperInstance0" },
+        "NetworkInterfaceId": { "Ref" : "ZookeeperENI0" }
+      }
+    },
+
+    "Zookeeper1ENIAttach" :{
+      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
+      "Properties" : {
+        "DeleteOnTermination": false,
+        "DeviceIndex": 1,
+        "InstanceId": { "Ref" : "ZookeeperInstance1" },
+        "NetworkInterfaceId": { "Ref" : "ZookeeperENI1" }
+      }
+    },
+
+    "Zookeeper2ENIAttach" :{
+      "Type" : "AWS::EC2::NetworkInterfaceAttachment",
+      "Properties" : {
+        "DeleteOnTermination": false,
+        "DeviceIndex": 1,
+        "InstanceId": { "Ref" : "ZookeeperInstance2" },
+        "NetworkInterfaceId": { "Ref" : "ZookeeperENI2" }
+      }
+    },
+
     "SSHBastionInstance" : {
       "Type" : "AWS::EC2::Instance",
       "Properties" : {
@@ -942,8 +1241,6 @@
         }
       }
     }
-
-
   },
 
   "Outputs" : {
