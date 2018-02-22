@@ -10,4 +10,8 @@ https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-nginx.tar.gz
 tomcat/java cookbook -
 https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-tomcat.tar.gz
 
+Reference-style: 
+![alt text][diagram]
+
+[diagram]: https://github.com/azcoffeehabit/cfsamplepkg/blob/master/cfsamplepkg.png "Diagram"
 
