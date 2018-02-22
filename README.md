@@ -13,6 +13,9 @@ https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-nginx.tar.gz
 tomcat/java cookbook -
 https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-tomcat.tar.gz
 
+kafka cookbook -
+https://s3-us-west-2.amazonaws.com/aogibvginf21/pkg-kafka.tar.gz
+
 Reference-style:
 ![alt text][diagram]
 
