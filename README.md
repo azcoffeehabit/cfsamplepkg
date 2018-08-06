@@ -1,10 +1,8 @@
 # cfsamplepkg
 
-This project is an example of a multi-tier webapplication in AWS.  This wont work in your AWS account without some modifications to things like the ssl certificate and Route53 URL and Route53 configuration.
+This project is an example of a multi-tier webapplication in AWS.  This will NOT work in your AWS account without some modifications to things like the ssl certificate and Route53 URL and Route53 configurations.
 
 This project relies on the following chef-solo cookbooks which I am hosting in an S3 bucket
-
-When built the application is attached to the URL http://message.customhousesystems.com this will redirect to HTTPS.
 
 
 nginx cookbook -
